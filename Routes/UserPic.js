@@ -1,52 +1,61 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const path = require('path'); // Add this line to import the path module
-const {ProfilePic} = require('../Schema/Schema')
-const {User} = require('../Schema/Schema');
+const path = require('path');
+const crypto = require('crypto');
+const fs = require('fs');
+const mongoose = require('mongoose');
+const { User } = require('../Schema/Schema');
+const { authenticate } = require('./authenticate');
 
-// Set up Multer for file uploads
+const UPLOAD_DIR = 'upload/profile-pics';
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const ALLOWED_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'upload/profile-pics');
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_EXT.includes(ext)) return cb(new Error('Invalid file extension'));
+    cb(null, `${crypto.randomBytes(16).toString('hex')}${ext}`);
   },
-  filename: function (req, file, cb) {
-    cb(null, `profilePic-${Date.now()}${path.extname(file.originalname)}`);
-  }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_MIME.includes(file.mimetype)) return cb(new Error('Invalid file type'));
+    cb(null, true);
+  },
+});
 
-// Route to handle profile picture upload
-router.post('/upload-profile-pic', upload.single('profilePic'), async (req, res) => {
+router.post('/upload-profile-pic', authenticate, upload.single('profilePic'), async (req, res) => {
   try {
-    const userId = req.body.userId;
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+    const userId = req.user._id;
     const profilePicUrl = `/upload/profile-pics/${req.file.filename}`;
-
-    // Update user's profilePic field
     await User.findByIdAndUpdate(userId, { profilePic: profilePicUrl });
-
     res.json({ message: 'Profile picture uploaded successfully', profilePicUrl });
   } catch (err) {
-    res.status(500).json({ message: 'Error uploading profile picture', error: err.message });
+    console.error('Upload profile pic error:', err);
+    res.status(500).json({ message: 'Error uploading profile picture' });
   }
 });
 
-// Route to get the profile picture URL
 router.get('/profile-pic/:userId', async (req, res) => {
   try {
-    const userId = req.params.userId;
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    const profilePicUrl = user.profilePic ? `http://localhost:5000${user.profilePic}` : null;
-
-    res.json({ profilePicUrl });
+    const { userId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(userId))
+      return res.status(400).json({ message: 'Invalid ID' });
+    const user = await User.findById(userId).select('profilePic');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ profilePicUrl: user.profilePic || null });
   } catch (err) {
-    res.status(500).json({ message: 'Error fetching profile picture', error: err.message });
+    console.error('Get profile pic error:', err);
+    res.status(500).json({ message: 'Error fetching profile picture' });
   }
 });
 

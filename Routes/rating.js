@@ -1,51 +1,52 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const { Product } = require('../Schema/Schema');
+const { authenticate } = require('./authenticate');
 
-// Add Rating
-router.post('/product/:id/rate', async (req, res) => {
+router.post('/product/:id/rate', authenticate, async (req, res) => {
   try {
-    const { rating } = req.body; // Expect rating value between 1 and 5
+    const rating = Number(req.body.rating);
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5)
+      return res.status(400).json({ message: 'Invalid rating value' });
+    if (!mongoose.Types.ObjectId.isValid(req.params.id))
+      return res.status(400).json({ message: 'Invalid ID' });
 
-    // Validate rating
-    if (rating < 1 || rating > 5) {
-      return res.status(400).send('Invalid rating value');
-    }
-
-    // Find the product and update the rating
     const product = await Product.findById(req.params.id);
-    if (!product) {
-      return res.status(404).send('Product not found');
-    }
+    if (!product) return res.status(404).json({ message: 'Product not found' });
 
-    // Update average rating
+    // TODO: the Product schema does not track per-user ratings, so a user can still
+    // rate the same product multiple times. Recommend adding a `ratings` subdocument
+    // array of { userId, value } and enforce one-per-user here.
     const totalRating = product.averageRating * product.ratingCount;
     product.ratingCount += 1;
     product.averageRating = (totalRating + rating) / product.ratingCount;
 
     await product.save();
-    res.status(200).json({ averageRating: product.averageRating, ratingCount: product.ratingCount });
-  } catch (error) {
-    res.status(500).send('Server error');
-  }
-});
-
-// Fetch User Rating
-router.get('/product/:id/rating', async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id);
-    if (!product) {
-      return res.status(404).send('Product not found');
-    }
-
-    res.json({
+    res.status(200).json({
       averageRating: product.averageRating,
-      ratingCount: product.ratingCount
+      ratingCount: product.ratingCount,
     });
   } catch (error) {
-    res.status(500).send('Server error');
+    console.error('Rate product error:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
+router.get('/product/:id/rating', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id))
+      return res.status(400).json({ message: 'Invalid ID' });
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    res.json({
+      averageRating: product.averageRating,
+      ratingCount: product.ratingCount,
+    });
+  } catch (error) {
+    console.error('Get rating error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 module.exports = router;

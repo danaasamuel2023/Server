@@ -1,13 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const { Comment, Product, User } = require('../Schema/Schema');
+const mongoose = require('mongoose');
+const { Comment, Product } = require('../Schema/Schema');
+const { authenticate } = require('./authenticate');
 
-// GET comments for a specific item (most recent first)
 router.get('/:itemId', async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.itemId))
+      return res.status(400).json({ message: 'Invalid ID' });
     const comments = await Comment.find({ itemId: req.params.itemId })
       .populate('userId', 'username school')
-      .sort({ createdAt: -1 }); // Sort by createdAt in descending order
+      .sort({ createdAt: -1 });
     res.json(comments);
   } catch (error) {
     console.error('Error fetching comments:', error);
@@ -15,35 +18,33 @@ router.get('/:itemId', async (req, res) => {
   }
 });
 
-// POST a new comment
-router.post('/', async (req, res) => {
-  const { itemId, userId, comment } = req.body;
+router.post('/', authenticate, async (req, res) => {
+  const { itemId, comment } = req.body;
+  const userId = req.user._id;
 
   try {
+    if (!mongoose.Types.ObjectId.isValid(itemId))
+      return res.status(400).json({ message: 'Invalid item ID' });
+    if (typeof comment !== 'string' || !comment.trim() || comment.length > 2000)
+      return res.status(400).json({ message: 'Invalid comment' });
+
     const item = await Product.findById(itemId);
-    if (!item) {
-      console.error(`Item not found for ID: ${itemId}`);
-      return res.status(404).json({ message: 'Item not found' });
-    }
+    if (!item) return res.status(404).json({ message: 'Item not found' });
 
-    const user = await User.findById(userId);
-    if (!user) {
-      console.error(`User not found for ID: ${userId}`);
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    const isSeller = item.seller.toString() === userId;
+    const isSeller = item.seller.toString() === String(userId);
 
     const newComment = new Comment({
       itemId,
       userId,
-      comment,
+      comment: comment.trim(),
       isSeller,
     });
 
     const savedComment = await newComment.save();
-    const populatedComment = await Comment.findById(savedComment._id).populate('userId', 'username school');
-
+    const populatedComment = await Comment.findById(savedComment._id).populate(
+      'userId',
+      'username school'
+    );
     res.status(201).json(populatedComment);
   } catch (error) {
     console.error('Error adding comment:', error);

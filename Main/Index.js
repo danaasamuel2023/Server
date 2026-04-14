@@ -1,9 +1,11 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const multer = require('multer');
 const cors = require('cors');
+const helmet = require('helmet');
 const http = require('http');
 const socketIo = require('socket.io');
+
 const ConnectDB = require('../Connection/Connect');
 const Users = require('../Routes/User.js');
 const CreateUser = require('../Routes/UserCreate');
@@ -20,7 +22,6 @@ const messageRoutes = require('../Routes/MessagesRoutes');
 const MessagesForProduct = require('../Routes/Conversation.js');
 const CommentSection = require('../Routes/Comment.js');
 const ProductByUserId = require('../Routes/ProductByUserId.js');
-const { ProfilePic, User } = require('../Schema/Schema'); // Import ProfilePic and User models
 const CommentEnable = require('../Routes/CommentEnable.js');
 const Instock = require('../Routes/InStock.js');
 const ProfileUpload = require('./Upload.js');
@@ -29,52 +30,52 @@ const BioUpdate = require('../Routes/Bio.js');
 const views = require('../Routes/Views.js');
 const Rating = require('../Routes/rating.js');
 const PassReset = require('../Routes/PassReset.js');
-const Contact = require('../Routes/Contact.js')
+const Contact = require('../Routes/Contact.js');
+const UserPic = require('../Routes/UserPic.js');
+
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173,http://localhost:3000')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:5173",
-    methods: ["GET", "POST"]
-  }
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
 });
 
-// Middleware
-app.use(express.json());
-app.use(cors());
+app.use(helmet());
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// Serve static files from the 'uploads' directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(
+  '/uploads',
+  express.static(path.join(__dirname, 'uploads'), {
+    dotfiles: 'deny',
+    index: false,
+  })
+);
 
-// Profile bio update route
-const { Profile } = require('../Schema/Schema.js');
-app.put('/api/bio/profile/:id/update-bio', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { bio } = req.body;
-
-    const updatedProfile = await Profile.findOneAndUpdate(
-      { user: id },
-      { bio },
-      { new: true }
-    );
-
-    if (!updatedProfile) {
-      return res.status(404).json({ message: 'Profile not found' });
-    }
-
-    res.json(updatedProfile);
-  } catch (error) {
-    console.error('Error updating bio:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Connect to the database
 ConnectDB();
 
-// Use routes
 app.use('/api', CreateUser);
+app.use('/api', Users);
 app.use('/api', UploadItem);
 app.use('/api', Getall);
 app.use('/api', GetSchoolByname);
@@ -92,18 +93,26 @@ app.use('/api', CommentEnable);
 app.use('/api/product', Instock);
 app.use('/apis/profile', ProfileUpload);
 app.use('/api/delect', DeleteProduct);
+app.use('/api/bio', BioUpdate);
 app.use('/api', views);
 app.use('/api', Rating);
 app.use('/api', PassReset);
 app.use('/api', Contact);
+app.use('/api', UserPic);
 
-// Serve the React app for all other routes
-app.use(express.static(path.join(__dirname, '..', 'client', 'build')));
-app.get('*', (req, res) => {
-  res.sendFile(path.resolve(__dirname, '..', 'client', 'build', 'index.html'));
+app.use('/api', (req, res) => res.status(404).json({ message: 'Not found' }));
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  if (err && err.message === 'Not allowed by CORS')
+    return res.status(403).json({ message: 'CORS blocked' });
+  if (err && err.name === 'MulterError')
+    return res.status(400).json({ message: err.message });
+  if (err && (err.message === 'Invalid file type' || err.message === 'Invalid file extension'))
+    return res.status(400).json({ message: err.message });
+  res.status(500).json({ message: 'Server error' });
 });
 
-// Start the server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
